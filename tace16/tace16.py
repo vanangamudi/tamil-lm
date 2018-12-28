@@ -69,21 +69,41 @@ def read_csv(filename='../tace16/data_new.csv'):
 
 
 def tace16_to_utf8(string):
-    return bytes([uc for i in string for c in conversion_map[i] for uc in c]).decode('utf-8')
+    op = []
+    for i in string:
+        try:
+            for c in conversion_map[i]:
+                op.extend(c)
+        except:
+            op.append(i)
+            
+    return bytes(op).decode('utf-8')
+                
+    #return bytes([uc for i in string for c in conversion_map[i] for uc in c]).decode('utf-8')
 
 def utf8_to_tace16(string):
     log.debug('input:{}'.format(string))
     letters = []
     string = string.encode()
-    for i in range(len(string)//3):
-        triplet = tuple(string[3*i:3*(i+1)])
-        if triplet in vowel_ops.keys():
-            letters[-1] += vowel_ops[triplet]
-        else:
-            letter = utf8_letter_map[(triplet,)]
-            tace = letter_tace16_map[letter]
-            letters.append(tace)
+    #for i in range(len(string)//3):
+    i = 0
+    #print('string', len(string))
+    while i < len(string):
+        try:
+            triplet = tuple(string[i:i+3])
+            if triplet in vowel_ops.keys():
+                letters[-1] += vowel_ops[triplet]
+            else:
+                letter = utf8_letter_map[(triplet,)]
+                tace = letter_tace16_map[letter]
+                letters.append(tace)
+                
+            i += 3
+        except:
+            letters.append(string[i])
+            i += 1
 
+    #print('letters', len(letters))
     return letters
                 
 def utf8_to_utf32(utf8_points):
@@ -145,7 +165,8 @@ def test2(string='அம்மா'):
 
     
 def print_bytes(b):
-    return ' '.join(['{:02X}'.format(i) for i in b])
+    #return ' '.join(['{:02X}'.format(i) for i in b])
+    return ' '.join(['{}'.format(i) for i in b])
 
         
 def test3():
@@ -159,14 +180,18 @@ def test3():
 
 
 def test4(string='அப்பா'):
-    print(string, end=' ')
+    print('---- test4 ----')
+    print(string)
     tace = utf8_to_tace16(string)
-    print(print_bytes(tace), end=' ')
+    print(print_bytes(tace))
     utf =  tace16_to_utf8(tace)
-    print(bytes(utf).decode())
+    print(utf)
     
 if __name__ == '__main__':
     test1()
     test4('சிந்தனை')
+    test4('சிந்தனை abcd')
+    test4('சிந்தனை abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 1234567890 ')
+    test4('சிந்தனை `~!@#$%^&*()_+-=[]\;\',./{}|:"<>?')
     #test2('சிந்தனை')
     
