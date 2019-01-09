@@ -76,8 +76,11 @@ def tace16_to_utf8(string):
                 op.extend(c)
         except:
             op.append(i)
-            
-    return bytes(op).decode('utf-8')
+
+    try:
+        return bytes(op).decode('utf-8')
+    except:
+        log.exception(op)
                 
     #return bytes([uc for i in string for c in conversion_map[i] for uc in c]).decode('utf-8')
 
