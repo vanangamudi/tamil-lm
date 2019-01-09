@@ -130,11 +130,54 @@ def load_tawiki_data(config, dataset_name='tawiki', char_level = True, max_sampl
 
     return os.path.basename(filename), samples, vocab
 
+def load_tawiki_bpe_data(config, dataset_name='tawiki', max_sample_size=None):
+    samples = []
+    skipped = 0
+
+    vocab = Counter()
+    
+    try:
+        filename = glob.glob('../dataset/tawiki_lines_bpe.txt')[0]
+              
+        log.info('processing file: {}'.format(filename))
+        dataset = open(filename).readlines()
+        for i, line in enumerate(tqdm(dataset, desc='processing {}'.format(filename))):
+            import string
+
+            #print(line)
+            try:
+                line = line.strip()
+                if len(line) > 0:
+                    samples.append(
+                        Sample(
+                            id = '{}.{}'.format(dataset_name, i),
+                            sequence = line.split(),
+                            char_level = False
+                        )
+                    )
+            except:
+                log.exception('{}.{} -  {}'.format(dataset_name, i, line))
+    except:
+        skipped += 1
+        log.exception('{}.{} -  {}'.format(dataset_name, i, line))
+
+    print('skipped {} samples'.format(skipped))
+    
+    samples = sorted(samples, key=lambda x: len(x.sequence), reverse=True)
+    if max_sample_size:
+        samples = samples[:max_sample_size]
+
+    log.info('building vocab...')
+    for sample in samples:
+        vocab.update(sample.sequence)
+
+    return os.path.basename(filename), samples, vocab
 
 
-def load_data(config, max_sample_size=None):
+def load_data(config, max_sample_size=None, char_level=True):
     dataset = {}
-    filename, samples, vocab = load_tawiki_data(config)
+    #filename, samples, vocab = load_tawiki_data(config, char_level=char_level)
+    filename, samples, vocab = load_tawiki_bpe_data(config)
     vocab = Vocab(vocab, special_tokens=VOCAB)
     pivot = int( config.CONFIG.split_ratio * len(samples))
     train_samples, test_samples = samples[:pivot], samples[pivot:]
@@ -154,7 +197,7 @@ def loss(ti, output, batch, loss_function, *args, **kwargs):
 def accuracy(ti, output, batch, *args, **kwargs):
     indices, (sequence, ), _ = batch
     output, state = output
-    return (output.max(dim=1)[1] == sequence[:, ti+1]).sum().float()/float(answer.size(0))
+    return (output.max(dim=1)[1] == sequence[:, ti+1]).sum().float()/float(answer.size(0))/float(answer.size(1))
 
 
 def repr_function(output, batch, VOCAB, dataset):
