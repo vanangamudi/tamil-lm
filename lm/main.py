@@ -85,10 +85,14 @@ if __name__ == '__main__':
     predict_parser = subparsers.add_parser('predict',
                                 help='''starts a cli interface for running predictions 
                                 in inputs with best model from last training run''')
+
     predict_parser.add_argument('--predict', default='predict', dest='task')
     predict_parser.add_argument('--over-test-feed', action='store_true', dest='over_test_feed')
+    predict_parser.add_argument('--length', default=10, dest='prediction_length')
+
     predict_parser.add_argument('--show-plot', action='store_true', dest='show_plot')
     predict_parser.add_argument('--save-plot', action='store_true',  dest='save_plot')
+
     args = parser.parse_args()
     print(args)
     if args.log_filter:
@@ -115,7 +119,7 @@ if __name__ == '__main__':
     ########################################################################################
     if config.CONFIG.flush:
         log.info('flushing...')
-        dataset = load_data(config)
+        dataset = load_data(config, char_level=False)
         pickle.dump(dataset, open('{}__cache.pkl'.format(SELF_NAME), 'wb'))
     else:
         dataset = pickle.load(open('{}__cache.pkl'.format(SELF_NAME), 'rb'))
@@ -160,10 +164,13 @@ if __name__ == '__main__':
         model.do_train()
         
     if args.task == 'predict':
-        sample = Sample(0, )
-        batch = batchop(VOCAB=dataset.input_vocab, for_prediction=True)
-        output = model.predict(batch)
-        
-        
+        for i in range(10):
+            try:
+                output = model.do_predict(VOCAB=dataset.input_vocab,
+                                          length=int(args.prediction_length))
+            except:
+                log.exception('#########3')
+                pass
+                
     end = time.time()
     print('{} ELAPSED: {}'.format(ROOT_DIR, end - start))
