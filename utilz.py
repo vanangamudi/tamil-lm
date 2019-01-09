@@ -134,9 +134,11 @@ def load_tawiki_data(config, dataset_name='tawiki', char_level = True, max_sampl
 
 def load_data(config, max_sample_size=None):
     dataset = {}
-    filename, train_samples, vocab = load_tawiki_data(config)
+    filename, samples, vocab = load_tawiki_data(config)
     vocab = Vocab(vocab, special_tokens=VOCAB)
-    dataset[filename] = Dataset(filename, (train_samples, []), vocab, vocab)
+    pivot = int( config.CONFIG.split_ratio * len(samples))
+    train_samples, test_samples = samples[:pivot], samples[pivot:]
+    dataset[filename] = Dataset(filename, (train_samples, test_samples), vocab, vocab)
 
     return DatasetList('ta-lm', dataset.values())
         
@@ -157,49 +159,50 @@ def accuracy(ti, output, batch, *args, **kwargs):
 
 def repr_function(output, batch, VOCAB, dataset):
     indices, (sequence, ), _ = batch
-    output, attn = output
     results = []
-    output = output.max(1)[1]
     for idx, o in zip(indices, output):
-        o = ' '.join([LABELS[o]])
+        o = ' '.join([VOCAB[o]])
         
     return results
 
 
-def batchop(datapoints, VOCAB, *args, **kwargs):
+def batchop(datapoints, VOCAB, config, *args, **kwargs):
     indices = [d.id for d in datapoints]
     sequence = []
     for d in datapoints:
         s = []
         sequence.append([VOCAB[w] for w in d.sequence])
 
-    sequence    = LongVar(pad_seq(sequence))
+    sequence    = LongVar(config, pad_seq(sequence))
     batch = indices, (sequence, ), ()
     return batch
-
+    
 
 def portion(dataset, percent):
     return dataset[ : int(len(dataset) * percent) ]
 
 
 def train(config, argv, name, ROOT_DIR,  model, dataset):
-    _batchop = partial(batchop, VOCAB=dataset.input_vocab)
-    predictor_feed = DataFeed(name, dataset.testset, batchop=_batchop, batch_size=1)
-    train_feed     = DataFeed(name, portion(dataset.trainset, config.HPCONFIG.trainset_size),
-                              batchop=_batchop, batch_size=config.CONFIG.batch_size)
+    _batchop = partial(batchop, VOCAB=dataset.input_vocab, config=config)
+    predictor_feed = DataFeed(name,
+                              dataset.testset,
+                              batchop = _batchop,
+                              batch_size=1)
     
-    predictor = Predictor(name,
-                          model=model,
-                          directory=ROOT_DIR,
-                          feed=predictor_feed,
-                          repr_function=partial(repr_function
-                                                , VOCAB=dataset.input_vocab
-                                                , dataset=dataset.testset_dict))
-
+    train_feed     = DataFeed(name,
+                              portion(dataset.trainset,
+                                      config.HPCONFIG.trainset_size),
+                              batchop    = _batchop,
+                              batch_size = config.CONFIG.batch_size)
+    
+    
     loss_ = partial(loss, loss_function=nn.NLLLoss())
     test_feed, tester = {}, {}
     for subset in dataset.datasets:
-        test_feed[subset.name]      = DataFeed(subset.name, subset.testset, batchop=_batchop, batch_size=config.CONFIG.batch_size)
+        test_feed[subset.name]      = DataFeed(subset.name,
+                                               subset.testset,
+                                               batchop    = _batchop,
+                                               batch_size = config.CONFIG.batch_size)
 
         tester[subset.name] = Tester(name     = subset.name,
                                      config   = config,
@@ -213,17 +216,16 @@ def train(config, argv, name, ROOT_DIR,  model, dataset):
     test_feed[name]      = DataFeed(name, dataset.testset, batchop=_batchop, batch_size=config.CONFIG.batch_size)
 
     tester[name] = Tester(name  = name,
-                                  config   = config,
-                                  model    = model,
-                                  directory = ROOT_DIR,
-                                  loss_function = loss_,
-                                  accuracy_function = loss_,
-                                  feed = test_feed[name],
-                                  predictor=predictor)
-
-
+                          config   = config,
+                          model    = model,
+                          directory = ROOT_DIR,
+                          loss_function = loss_,
+                          accuracy_function = loss_,
+                          feed = test_feed[name],
+                          predictor=predictor)
+    
+    
     def do_every_checkpoint(epoch):
-        return None
         if config.CONFIG.plot_metrics:
             from matplotlib import pyplot as plt
             fig = plt.figure(figsize=(10, 5))
@@ -238,35 +240,8 @@ def train(config, argv, name, ROOT_DIR,  model, dataset):
             plt.savefig('loss.png')
             plt.close()
         
-
-
-    trainer = Trainer(name=name,
-                      config = config,
-                      model=model,
-                      directory=ROOT_DIR,
-                      optimizer  = optim.Adam(model.parameters()),
-                      loss_function = loss_,
-                      checkpoint = config.CONFIG.CHECKPOINT,
-                      do_every_checkpoint = do_every_checkpoint,
-                      epochs = config.CONFIG.EPOCHS,
-                      feed = train_feed,
-    )
-
-
-
+            
+            
     for e in range(config.CONFIG.EONS):
-
         if not trainer.train():
             raise Exception
-
-        dump = open('{}/results/eon_{}.csv'.format(ROOT_DIR, e), 'w')
-        log.info('on {}th eon'.format(e))
-        results = ListTable()
-        for ri in tqdm(range(predictor_feed.num_batch), desc='running prediction on eon: {}'.format(e)):
-            output, _results = predictor.predict(ri)
-            results.extend(_results)
-        dump.write(repr(results))
-        dump.close()
-
-        
-

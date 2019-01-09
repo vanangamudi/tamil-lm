@@ -24,7 +24,7 @@ import torch
 from anikattu.utilz import initialize_task, tqdm
 
 from model.lm import LM
-from utilz import load_data, train
+from utilz import load_data, train, batchop, loss, portion
 
 import importlib
 
@@ -35,9 +35,31 @@ import sys
 import pickle
 import argparse
 from matplotlib import pyplot as plt
+from functools import partial
 plt.style.use('ggplot')
+
+
+
+from anikattu.tokenizer import word_tokenize
+from anikattu.tokenstring import TokenString
+from anikattu.trainer.lm import Trainer , Tester, Predictor
+from anikattu.datafeed import DataFeed, MultiplexedDataFeed
+from anikattu.dataset import NLPDataset as Dataset, NLPDatasetList as DatasetList
+from anikattu.utilz import tqdm, ListTable
+from anikattu.vocab import Vocab
+from anikattu.utilz import Var, LongVar, init_hidden, pad_seq
+from nltk.tokenize import WordPunctTokenizer
+word_punct_tokenizer = WordPunctTokenizer()
+word_tokenize = word_punct_tokenizer.tokenize
+
+
+
 if __name__ == '__main__':
     start = time.time()
+
+    ########################################################################################
+    # Parser arguments
+    ########################################################################################
     parser = argparse.ArgumentParser(description='MACNet variant 2')
     parser.add_argument('-p','--hpconfig',
                         help='path to the hyperparameters config file',
@@ -72,6 +94,10 @@ if __name__ == '__main__':
     if args.log_filter:
         log.addFilter(CMDFilter(args.log_filter))
 
+        
+    ########################################################################################
+    # anikattu initialization for directory structure and so on
+    ########################################################################################
     ROOT_DIR = initialize_task(args.hpconfig, args.prefix_dir)
 
     sys.path.append('.')
@@ -83,7 +109,10 @@ if __name__ == '__main__':
     print('====================================')
     print(ROOT_DIR)
     print('====================================')
-        
+
+    ########################################################################################
+    # flush and load dataset or restore pickle file
+    ########################################################################################
     if config.CONFIG.flush:
         log.info('flushing...')
         dataset = load_data(config)
@@ -95,31 +124,45 @@ if __name__ == '__main__':
     log.info('dataset[:10]: {}'.format(pformat(random.choice(dataset.trainset))))
 
     #log.info('vocab: {}'.format(pformat(dataset.output_vocab.freq_dict)))
+    ########################################################################################
+    # load model snapshot data 
+    ########################################################################################
+    _batchop = partial(batchop, VOCAB=dataset.input_vocab, config=config)
+    predictor_feed = DataFeed(SELF_NAME,
+                              dataset.testset,
+                              batchop = _batchop,
+                              batch_size=1)
     
-    try:
-        model_snapshot = '{}/weights/{}.{}'.format(ROOT_DIR, SELF_NAME, 'pth')
-        model =  LM(config, 'LM', len(dataset.input_vocab), nn.NLLLoss())
-        model.load_state_dict(torch.load(model_snapshot))
-        log.info('loaded the old image for the model from :{}'.format(model_snapshot))
-    except:
-        log.exception('failed to load the model  from :{}'.format(model_snapshot))
-
+    train_feed     = DataFeed(SELF_NAME,
+                              portion(dataset.trainset,
+                                      config.HPCONFIG.trainset_size),
+                              batchop    = _batchop,
+                              batch_size = config.CONFIG.batch_size)
+    
+    
+    loss_ = partial(loss, loss_function=nn.NLLLoss())
+    test_feed      = DataFeed(SELF_NAME, dataset.testset, batchop=_batchop, batch_size=config.CONFIG.batch_size)
+    model =  LM(config, 'LM',
+                len(dataset.input_vocab),
+                loss_function = loss_,
+                train_feed = train_feed,
+                test_feed = test_feed,
+    )
+    
     if config.CONFIG.cuda:
         model = model.cuda()        
         if config.CONFIG.multi_gpu and torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!")
             model = nn.DataParallel(model)
 
-    print('**** the model', model)
-    
+    print('**** the model', model)    
     if args.task == 'train':
-        train(config, args, SELF_NAME, ROOT_DIR, model, dataset)
-
+        model.do_train()
         
     if args.task == 'predict':
         sample = Sample(0, )
-        batch = batchop( VOCAB=dataset.input_vocab, for_prediction=True)
-        output = model(batch)
+        batch = batchop(VOCAB=dataset.input_vocab, for_prediction=True)
+        output = model.predict(batch)
         
         
     end = time.time()
