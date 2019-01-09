@@ -26,6 +26,7 @@ from torch.autograd import Variable
 
 from anikattu.utilz import Var, LongVar, init_hidden, EpochAverager, FLAGS, tqdm
 from anikattu.debug import memory_consumed
+from tace16.tace16 import tace16_to_utf8, utf8_to_tace16
 
 class Base(nn.Module):
     def __init__(self, config, name):
@@ -73,7 +74,63 @@ class Base(nn.Module):
         return FLAGS.CONTINUE_TRAINING
 
 
+    def restore_checkpoint(self):
+        try:
+            self.snapshot_path = '{}/weights/{}.{}'.format(self.config.ROOT_DIR, self.name(), 'pth')
+            self.load_state_dict(torch.load(self.snapshot_path))
+            log.info('loaded the old image for the model from :{}'.format(self.snapshot_path))
+        except:
+            log.exception('failed to load the model  from :{}'.format(self.snapshot_path))
 
+            
+    def save_best_model(self):
+        with open('{}/{}_best_model_accuracy.txt'.format(self.config.ROOT_DIR, self.name()), 'w') as f:
+            f.write(str(self.best_model[0]))
+
+        if self.save_model_weights:
+            self.log.info('saving the last best model with accuracy {}...'.format(self.best_model[0]))
+
+            torch.save(self.best_model[1],
+                       '{}/weights/{:0.4f}.{}'.format(self.config.ROOT_DIR, self.best_model[0], 'pth'))
+            
+            torch.save(self.best_model[1],
+                       '{}/weights/{}.{}'.format(self.config.ROOT_DIR, self.name(), 'pth'))
+
+
+    def __build_stats__(self):
+        ########################################################################################
+        #  Saving model weights
+        ########################################################################################
+        
+        # necessary metrics
+        self.mfile_prefix = '{}/results/metrics/{}'.format(self.config.ROOT_DIR, self.name())
+        self.train_loss  = EpochAverager(self.config,
+                                       filename = '{}.{}'.format(self.mfile_prefix,   'train_loss'))
+        
+        self.test_loss  = EpochAverager(self.config,
+                                        filename = '{}.{}'.format(self.mfile_prefix,   'test_loss'))
+        self.accuracy   = EpochAverager(self.config,
+                                        filename = '{}.{}'.format(self.mfile_prefix,  'accuracy'))
+        
+        self.metrics = [self.train_loss, self.test_loss, self.accuracy]
+        # optional metrics
+        if getattr(self, 'f1score_function'):
+            self.tp = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,   'tp'))
+            self.fp = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'fp'))
+            self.fn = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'fn'))
+            self.tn = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'tn'))
+            
+            self.precision = EpochAverager(self.config,
+                                           filename = '{}.{}'.format(self.mfile_prefix,  'precision'))
+            self.recall    = EpochAverager(self.config,
+                                           filename = '{}.{}'.format(self.mfile_prefix,  'recall'))
+            self.f1score   = EpochAverager(self.config,
+                                           filename = '{}.{}'.format(self.mfile_prefix,  'f1score'))
+          
+            self.metrics += [self.tp, self.fp, self.fn, self.tn,
+                             self.precision, self.recall, self.f1score]
+
+            
 class LM(Base):
     def __init__(self,
                  # config and name
@@ -115,7 +172,7 @@ class LM(Base):
         self.answer = nn.Linear(self.hidden_size, self.vocab_size)
 
         self.loss_function = loss_function if loss_function else nn.NLLLoss()
-        self.accuracy_function = accuracy_function if accuracy_function else loss_function
+        self.accuracy_function = accuracy_function if accuracy_function else lambda *x, **xx: 1 / loss_function(*x, **xx)
 
         self.optimizer = optimizer if optimizer else optim.SGD(self.parameters(),
                                                                lr=0.01, momentum=0.1)
@@ -129,7 +186,7 @@ class LM(Base):
         self.train_feed = train_feed
         self.test_feed = test_feed
         
-        self.__build_stats()
+
 
         ########################################################################################
         #  Saving model weights
@@ -144,69 +201,18 @@ class LM(Base):
         except:
             log.exception('no last best model')
 
+        self.__build_stats__()
                         
         self.best_model_criteria = self.accuracy
         self.save_best_model()
 
+
         self.restore_checkpoint()
+
         if config.CONFIG.cuda:
              self.cuda()
 
 
-    def restore_checkpoint(self):
-        try:
-            self.snapshot_path = '{}/weights/{}.{}'.format(self.config.ROOT_DIR, self.name(), 'pth')
-            self.load_state_dict(torch.load(self.snapshot_path))
-            log.info('loaded the old image for the model from :{}'.format(self.snapshot_path))
-        except:
-            log.exception('failed to load the model  from :{}'.format(self.snapshot_path))
-
-    def __build_stats(self):
-        ########################################################################################
-        #  Saving model weights
-        ########################################################################################
-        
-        # necessary metrics
-        self.mfile_prefix = '{}/results/metrics/{}'.format(self.config.ROOT_DIR, self.name())
-        self.train_loss  = EpochAverager(self.config,
-                                       filename = '{}.{}'.format(self.mfile_prefix,   'train_loss'))
-        
-        self.test_loss  = EpochAverager(self.config,
-                                        filename = '{}.{}'.format(self.mfile_prefix,   'test_loss'))
-        self.accuracy   = EpochAverager(self.config,
-                                        filename = '{}.{}'.format(self.mfile_prefix,  'accuracy'))
-        
-        self.metrics = [self.train_loss, self.test_loss, self.accuracy]
-        # optional metrics
-        if getattr(self, 'f1score_function'):
-            self.tp = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,   'tp'))
-            self.fp = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'fp'))
-            self.fn = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'fn'))
-            self.tn = EpochAverager(self.config, filename = '{}.{}'.format(self.mfile_prefix,  'tn'))
-            
-            self.precision = EpochAverager(self.config,
-                                           filename = '{}.{}'.format(self.mfile_prefix,  'precision'))
-            self.recall    = EpochAverager(self.config,
-                                           filename = '{}.{}'.format(self.mfile_prefix,  'recall'))
-            self.f1score   = EpochAverager(self.config,
-                                           filename = '{}.{}'.format(self.mfile_prefix,  'f1score'))
-          
-            self.metrics += [self.tp, self.fp, self.fn, self.tn, self.precision, self.recall, self.f1score]
-            
-    def save_best_model(self):
-        with open('{}/{}_best_model_accuracy.txt'.format(self.config.ROOT_DIR, self.name()), 'w') as f:
-            f.write(str(self.best_model[0]))
-
-        if self.save_model_weights:
-            self.log.info('saving the last best model with accuracy {}...'.format(self.best_model[0]))
-
-            torch.save(self.best_model[1],
-                       '{}/weights/{:0.4f}.{}'.format(self.config.ROOT_DIR, self.best_model[0], 'pth'))
-            
-            torch.save(self.best_model[1],
-                       '{}/weights/{}.{}'.format(self.config.ROOT_DIR, self.name(), 'pth'))
-
-            
     def initial_hidden(self, batch_size):
         ret = Variable(torch.zeros( batch_size, self.lm.hidden_size))
         ret = ret.cuda() if self.config.CONFIG.cuda else ret
@@ -228,7 +234,9 @@ class LM(Base):
                     return
                            
             self.train()
+            teacher_force_count = [0, 0]
             for j in tqdm(range(self.train_feed.num_batch), desc='Trainer.{}'.format(self.name())):
+                self.optimizer.zero_grad()
                 input_ = self.train_feed.next_batch()
                 idxs, inputs, targets = input_
                 sequence = inputs[0].transpose(0,1)
@@ -241,12 +249,19 @@ class LM(Base):
                     output = self.forward(output, state)
                     loss += self.loss_function(ti, output, input_)
                     output, state = output
-                    output = output.max(1)[1]
-                    
+
+                    if random.random() > 0.5:
+                        output = output.max(1)[1]
+                        teacher_force_count[0] += 1
+                    else:
+                        output = sequence[ti+1]
+                        teacher_force_count[1] += 1
+                        
                 loss.backward()
                 self.train_loss.cache(loss.data.item())
                 self.optimizer.step()
-
+                
+            self.log.info('teacher_force_count: {}'.format(teacher_force_count))
 
             self.log.info('-- {} -- loss: {}\n'.format(epoch, self.train_loss.epoch_cache))
             self.train_loss.clear_cache()
@@ -268,6 +283,7 @@ class LM(Base):
             loss, accuracy = Var(self.config, [0]), Var(self.config, [0])
             output = sequence[0]
             outputs = []
+            ti = 0
             for ti in range(1, sequence.size(0) - 1):
                 output = self.forward(output, state)
                 loss += self.loss_function(ti, output, input_)
@@ -288,9 +304,8 @@ class LM(Base):
             self.log.info('beat best ..')
             last_acc = self.best_model[0]
             self.best_model = (self.accuracy.epoch_cache.avg,
-                               (self.state_dict())
-                               
-            )
+                               self.state_dict())                             
+
             self.save_best_model()
             
             if self.config.CONFIG.cuda:
@@ -306,3 +321,30 @@ class LM(Base):
         if self.early_stopping:
             return self.loss_trend()
     
+    def do_predict(self, VOCAB, input_=None, length=10):
+        if not input_:
+            input_ = self.train_feed.nth_batch(
+                random.randint(0, self.train_feed.size),
+                1
+            )
+            
+        idxs, inputs, targets = input_
+        sequence = inputs[0].transpose(0,1)
+        _, batch_size = sequence.size()
+        
+        state = self.initial_hidden(batch_size)
+        loss = 0
+        output = sequence[0]
+        outputs = []
+        for ti in range(length - 1):
+            outputs.append(output)
+            output = self.forward(output, state)
+            output, state = output
+            output = output.max(1)[1]
+
+        outputs = torch.stack(outputs).transpose(0,1)
+        for i in range(outputs.size(0)):
+            s = [VOCAB[outputs[i][j]] for j in range(outputs.size(1)) if VOCAB[outputs[i][j]] not in VOCAB.special_tokens]
+            print(' '.join(s).replace('@@ ', ''))
+            
+        return True
